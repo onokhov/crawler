@@ -5,7 +5,6 @@ use strict;
 use utf8;
 
 use AE;
-use AnyEvent::HTTP;
 use JSON qw(from_json to_json);
 use Getopt::Long;
 use URI;
