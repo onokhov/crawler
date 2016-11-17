@@ -33,7 +33,7 @@ my @URLS_TO_LOAD;       # сюда складываем урлы для загр
 my %URLS_IN_PROGRESS;   # здесь храним урлы в процессе загрузки
 my %FILES_DONE;         # а здесь уже загруженные урлы
 my $TARGET_HOST;        # фильтровать по нему будем
-
+my $UA = LWP::UserAgent->new(); 
 
 # опции командной строки со значениями по умолчанию
 my $opt_parallel   = 1;
@@ -57,10 +57,18 @@ $opt_parallel = abs($opt_parallel) || 1;
 push @URLS_TO_LOAD, URI->new( $ARGV[0] )->canonical;
 $TARGET_HOST    = $URLS_TO_LOAD[0]->host;
 
+# настраиваем юзерагент перед использованием
+$UA->add_handler( response_header => sub {
+                      my $type = shift->header('content-type') || 'text/';
+                      unless ( $type =~ m{^text/} ) { 
+                          DEBUG "пропускаем тип $type";
+                          die;  # не будем грузить картинки, видео и другое не текстовое
+                      }
+                  });    
+
 INFO "Crawler started url: $ARGV[0], parallel: $opt_parallel";
 DEBUG "target_host: $TARGET_HOST";
 load_state(); # если загрузка была раннее прервана, то восстановим её
-
 
 my $children_count = 0; # счетчик параллельных процессов. Будем следить, чтоб не превышал заказанное количество.
 my $cv = AnyEvent->condvar; # эта переменная будет использована для отслеживания детей
@@ -78,7 +86,6 @@ exit;
 sub seen { # для фильтра урлов, чтоб не грузить уже загруженные
     return $FILES_DONE{ url_to_filename(URI->new($_[0])) } || $URLS_IN_PROGRESS{ $_[0] };
 }
-
 
 # в этой процедуре плодим детей в цикле до заданного ограничения
 sub spawn {
@@ -125,15 +132,7 @@ sub spawn {
 sub download_and_save {
     my $url = URI->new(shift);
     DEBUG "Ребенок $$, задание $url начало";
-    my $ua = LWP::UserAgent->new();
-    $ua->add_handler( response_header => sub {
-                          my ($response, $ua, $h) = @_;
-                          unless ( ($response->header('content-type') ||'') =~ m{^text/} ) {
-                              DEBUG "пропускаем тип " . ($response->header('content-type')||'');
-                              die;  # не будем грузить картинки, видео и другое не текстовое
-                          }
-                      });    
-    my $html = $ua->get($url)->decoded_content;
+    my $html = $UA->get($url)->decoded_content;
     my $new_urls = length $html > 0 ? parse_and_save(\$html, $url) : [];
 #    DEBUG "Ребенок $$, Загружен $url: $html";
     DEBUG "Ребенок $$ новый урл $_" for grep !seen($_), @$new_urls;
@@ -152,7 +151,7 @@ sub parse_and_save {
     seek($f, 0, 0)  or LOGDIE "Ошибка seek на начало $filename: $!";
     truncate($f, 0) or LOGDIE "Ошибка truncate $filename: $!";
 
-    my @urls;
+    my @urls; # сюда будем складывать найденные ссылки для последующей загрузки
 
     $$html_ref =~ s{\@include\s+url\((["']*)([^"'\)]+)\1\)}    # css include
                    {  my $url = URI->new_abs($2, $base);
